@@ -17,6 +17,8 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
@@ -52,11 +54,18 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
     private final WebSocketClient client;
     private final URI targetUri;
     private final ProxyCookieRewriter cookieRewriter;
+    private final String upstreamOrigin;
 
-    public WebSocketProxyHandler(WebSocketClient client, URI targetUri, ProxyCookieRewriter cookieRewriter) {
+    /**
+     * @param upstreamOrigin {@code Origin} to send on the upstream handshake, or {@code null} to send none. For
+     *                       upstreams that reject handshakes without one, or only accept specific origins.
+     */
+    public WebSocketProxyHandler(WebSocketClient client, URI targetUri, ProxyCookieRewriter cookieRewriter,
+                                 String upstreamOrigin) {
         this.client = client;
         this.targetUri = targetUri;
         this.cookieRewriter = cookieRewriter;
+        this.upstreamOrigin = upstreamOrigin == null || upstreamOrigin.isBlank() ? null : upstreamOrigin;
     }
 
     @Override
@@ -65,11 +74,17 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
                 downstream, SEND_TIME_LIMIT_MS, WebSocketProxyConfig.MAX_MESSAGE_BYTES);
         URI upstreamUri = upstreamUri(downstream.getUri());
         log.info("WS {} -> {}", downstream.getUri(), upstreamUri);
+        WebSocketHttpHeaders upstreamHeaders = upstreamHeaders(downstream);
+        if (log.isDebugEnabled()) {
+            // Names only: values may be credentials.
+            log.debug("WS upstream handshake to {}: headers={} cookies={}", upstreamUri,
+                    upstreamHeaders.headerNames(), cookieNames(upstreamHeaders.getFirst(HttpHeaders.COOKIE)));
+        }
         try {
             // Blocks the container thread until the backend accepted the handshake; frames from the
             // browser are not dispatched before this method returns, so nothing is lost meanwhile.
             WebSocketSession upstream = client
-                    .execute(new UpstreamHandler(safeDownstream), upstreamHeaders(downstream), upstreamUri)
+                    .execute(new UpstreamHandler(safeDownstream), upstreamHeaders, upstreamUri)
                     .get(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             downstream.getAttributes().put(UPSTREAM_ATTR, new ConcurrentWebSocketSessionDecorator(
                     upstream, SEND_TIME_LIMIT_MS, WebSocketProxyConfig.MAX_MESSAGE_BYTES));
@@ -142,7 +157,20 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
         if (uri != null) {
             out.set("X-Forwarded-Proto", "wss".equals(uri.getScheme()) || "https".equals(uri.getScheme()) ? "https" : "http");
         }
+        if (upstreamOrigin != null) {
+            out.setOrigin(upstreamOrigin);
+        }
         return out;
+    }
+
+    private static List<String> cookieNames(String cookieHeader) {
+        if (cookieHeader == null) {
+            return List.of();
+        }
+        return Arrays.stream(cookieHeader.split(";"))
+                .map(String::trim)
+                .map(cookie -> cookie.contains("=") ? cookie.substring(0, cookie.indexOf('=')) : cookie)
+                .toList();
     }
 
     private static void closeQuietly(WebSocketSession session, CloseStatus status) {

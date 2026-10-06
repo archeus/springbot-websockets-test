@@ -58,6 +58,13 @@ splits the work:
   (see [Cookie separation](#cookie-separation)). Hop-by-hop,
   handshake and `Origin` headers are dropped. `X-Forwarded-For/Host/Proto` are set fresh rather than
   trusted from the client.
+- **Upstream `Origin`**: by default the upstream handshake has no `Origin` (Spring upstreams accept that). If the
+  upstream rejects it, or only accepts specific origins, the relay fails with
+  `DeploymentException: The HTTP response from the server [403] did not permit the HTTP upgrade to WebSocket`.
+  Set `proxy.websocket-origin` to a value the upstream accepts. For comparison, Node `http-proxy` (`ws: true`)
+  forwards the browser's `Origin` as-is, and its `changeOrigin` only changes the `Host` header.
+- **Debugging the upstream handshake**: `logging.level.org.example.proxy.mvc.WebSocketProxyHandler=DEBUG` logs the
+  header names and cookie names sent upstream (no values).
 
 Configuration lives in `mvc-proxy/src/main/resources/application.yml` (`proxy.target-uri`, `proxy.http-paths`,
 `proxy.websocket-paths`, `proxy.cookies`).

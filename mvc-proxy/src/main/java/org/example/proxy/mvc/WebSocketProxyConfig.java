@@ -46,7 +46,7 @@ public class WebSocketProxyConfig implements WebSocketConfigurer {
         StandardWebSocketClient client = new StandardWebSocketClient(container);
         // Only present with proxy.insecure-tls=true (see InsecureTlsConfig); used for wss:// upstreams.
         insecureUpstreamSslContext.ifAvailable(client::setSslContext);
-        return new WebSocketProxyHandler(client, props.targetUri(), cookieRewriter);
+        return new WebSocketProxyHandler(client, props.targetUri(), cookieRewriter, props.websocketOrigin());
     }
 
     /** Buffer sizes for the browser-facing (server) side. */

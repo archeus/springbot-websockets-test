@@ -15,6 +15,9 @@ proxy.insecure-tls=false
 proxy.http-paths[0]=/path1/**
 # WebSocket endpoints, proxied by WebSocketProxyHandler (matched before the HTTP route).
 proxy.websocket-paths[0]=/path1/ws
+# Origin sent on the upstream WebSocket handshake. Unset: none (the browser's Origin is never forwarded).
+# Set it if the upstream rejects handshakes without an Origin, to a value the upstream accepts.
+#proxy.websocket-origin=http://localhost:4200
 # The backend's cookies are stored in the browser as PX_<name>, confined to /path1.
 # Only PX_ cookies are forwarded to the backend (prefix removed); this app's own cookies never are.
 proxy.cookies.prefix=PX_
