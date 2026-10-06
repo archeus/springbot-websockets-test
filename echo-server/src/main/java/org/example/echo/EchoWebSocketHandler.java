@@ -4,19 +4,28 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.SubProtocolCapable;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Echoes every text/binary frame back to the sender. On connect it sends a greeting containing
  * the handshake headers it saw, so you can tell whether the connection came through a proxy.
+ * <p>
+ * Accepts the optional subprotocol {@code echo.v1}, to check that a proxy passes subprotocol negotiation through.
  */
-public class EchoWebSocketHandler extends AbstractWebSocketHandler {
+public class EchoWebSocketHandler extends AbstractWebSocketHandler implements SubProtocolCapable {
 
     private static final Logger log = LoggerFactory.getLogger(EchoWebSocketHandler.class);
+
+    @Override
+    public List<String> getSubProtocols() {
+        return List.of("echo.v1");
+    }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -27,6 +36,7 @@ public class EchoWebSocketHandler extends AbstractWebSocketHandler {
                 + " | X-Forwarded-For=" + headers.getFirst("X-Forwarded-For")
                 + " | X-Forwarded-Host=" + headers.getFirst("X-Forwarded-Host")
                 + " | Cookie=" + headers.getFirst("Cookie")
+                + " | subprotocol=" + session.getAcceptedProtocol()
                 + " | uri=" + session.getUri()));
     }
 

@@ -35,18 +35,25 @@ public class WebSocketProxyConfig implements WebSocketConfigurer {
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         // No setAllowedOrigins(...): Spring then only accepts same-origin browser handshakes,
         // which is exactly the case for the page served by this proxy.
-        registry.addHandler(webSocketProxyHandler(), props.websocketPaths().toArray(String[]::new));
+        registry.addHandler(webSocketProxyHandler(), props.websocketPaths().toArray(String[]::new))
+                // Connects to the upstream before answering the browser (see WebSocketProxyHandshakeHandler).
+                .setHandshakeHandler(webSocketProxyHandshakeHandler());
     }
 
     @Bean
     public WebSocketProxyHandler webSocketProxyHandler() {
+        return new WebSocketProxyHandler();
+    }
+
+    @Bean
+    public WebSocketProxyHandshakeHandler webSocketProxyHandshakeHandler() {
         WebSocketContainer container = ContainerProvider.getWebSocketContainer();
         container.setDefaultMaxTextMessageBufferSize(MAX_MESSAGE_BYTES);
         container.setDefaultMaxBinaryMessageBufferSize(MAX_MESSAGE_BYTES);
         StandardWebSocketClient client = new StandardWebSocketClient(container);
         // Only present with proxy.insecure-tls=true (see InsecureTlsConfig); used for wss:// upstreams.
         insecureUpstreamSslContext.ifAvailable(client::setSslContext);
-        return new WebSocketProxyHandler(client, props.targetUri(), cookieRewriter, props.websocketOrigin());
+        return new WebSocketProxyHandshakeHandler(client, props.targetUri(), cookieRewriter, props.websocketOrigin());
     }
 
     /** Buffer sizes for the browser-facing (server) side. */

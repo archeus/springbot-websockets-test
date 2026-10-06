@@ -2,102 +2,49 @@ package org.example.proxy.mvc;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpHeaders;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
-import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.client.WebSocketClient;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-import java.util.TreeSet;
-import java.util.concurrent.TimeUnit;
 
 /**
- * WebSocket reverse proxy for the servlet stack.
+ * WebSocket reverse proxy for the servlet stack: relays text/binary frames between the browser ("downstream")
+ * session and the backend ("upstream") session. Closing either side closes the other one.
  * <p>
- * For every browser ("downstream") session accepted by this proxy, it opens a matching "upstream"
- * session to the backend (same path + query string) and relays text/binary frames in both directions.
- * Closing either side closes the other one.
+ * The upstream session is opened during the browser's handshake by {@link WebSocketProxyHandshakeHandler}, which
+ * passes it here through the session attributes.
  */
 public class WebSocketProxyHandler extends AbstractWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(WebSocketProxyHandler.class);
 
-    private static final String UPSTREAM_ATTR = WebSocketProxyHandler.class.getName() + ".upstream";
-    private static final long CONNECT_TIMEOUT_SECONDS = 10;
+    static final String RELAY_ATTR = WebSocketProxyHandler.class.getName() + ".relay";
     private static final int SEND_TIME_LIMIT_MS = 10_000;
-
-    /**
-     * Headers not copied to the upstream handshake: hop-by-hop and handshake headers (the WebSocket client
-     * generates its own), forwarding headers, which are set fresh so a browser cannot spoof them, and
-     * {@code Cookie}, which is filtered by {@link ProxyCookieRewriter}.
-     */
-    private static final Set<String> EXCLUDED_HEADERS = caseInsensitive(
-            "Host", "Origin", "Connection", "Upgrade", "Keep-Alive", "TE", "Trailer", "Transfer-Encoding",
-            "Content-Length", "Proxy-Authorization", "Proxy-Connection",
-            "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions",
-            "Sec-WebSocket-Accept", "Sec-WebSocket-Protocol",
-            "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port",
-            "X-Forwarded-Prefix", "Cookie");
-
-    private final WebSocketClient client;
-    private final URI targetUri;
-    private final ProxyCookieRewriter cookieRewriter;
-    private final String upstreamOrigin;
-
-    /**
-     * @param upstreamOrigin {@code Origin} to send on the upstream handshake, or {@code null} to send none. For
-     *                       upstreams that reject handshakes without one, or only accept specific origins.
-     */
-    public WebSocketProxyHandler(WebSocketClient client, URI targetUri, ProxyCookieRewriter cookieRewriter,
-                                 String upstreamOrigin) {
-        this.client = client;
-        this.targetUri = targetUri;
-        this.cookieRewriter = cookieRewriter;
-        this.upstreamOrigin = upstreamOrigin == null || upstreamOrigin.isBlank() ? null : upstreamOrigin;
-    }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession downstream) throws Exception {
-        WebSocketSession safeDownstream = new ConcurrentWebSocketSessionDecorator(
-                downstream, SEND_TIME_LIMIT_MS, WebSocketProxyConfig.MAX_MESSAGE_BYTES);
-        URI upstreamUri = upstreamUri(downstream.getUri());
-        log.info("WS {} -> {}", downstream.getUri(), upstreamUri);
-        WebSocketHttpHeaders upstreamHeaders = upstreamHeaders(downstream);
-        if (log.isDebugEnabled()) {
-            // Names only: values may be credentials.
-            log.debug("WS upstream handshake to {}: headers={} cookies={}", upstreamUri,
-                    upstreamHeaders.headerNames(), cookieNames(upstreamHeaders.getFirst(HttpHeaders.COOKIE)));
+        UpstreamRelay relay = relay(downstream);
+        if (relay == null) {
+            log.warn("WS downstream {} has no upstream connection", downstream.getId());
+            downstream.close(CloseStatus.SERVER_ERROR);
+            return;
         }
-        try {
-            // Blocks the container thread until the backend accepted the handshake; frames from the
-            // browser are not dispatched before this method returns, so nothing is lost meanwhile.
-            WebSocketSession upstream = client
-                    .execute(new UpstreamHandler(safeDownstream), upstreamHeaders, upstreamUri)
-                    .get(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            downstream.getAttributes().put(UPSTREAM_ATTR, new ConcurrentWebSocketSessionDecorator(
-                    upstream, SEND_TIME_LIMIT_MS, WebSocketProxyConfig.MAX_MESSAGE_BYTES));
-        } catch (Exception e) {
-            log.warn("WS upstream connect to {} failed: {}", upstreamUri, e.toString());
-            downstream.close(CloseStatus.SERVICE_RESTARTED.withReason("Upstream unavailable"));
-        }
+        relay.attach(new ConcurrentWebSocketSessionDecorator(
+                downstream, SEND_TIME_LIMIT_MS, WebSocketProxyConfig.MAX_MESSAGE_BYTES));
     }
 
     @Override
     public void handleMessage(WebSocketSession downstream, WebSocketMessage<?> message) throws Exception {
         if (message instanceof TextMessage || message instanceof BinaryMessage) {
-            WebSocketSession upstream = upstream(downstream);
+            UpstreamRelay relay = relay(downstream);
+            WebSocketSession upstream = relay == null ? null : relay.upstream();
             if (upstream != null && upstream.isOpen()) {
                 upstream.sendMessage(message);
             }
@@ -113,67 +60,17 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession downstream, CloseStatus status) {
         log.info("WS downstream {} closed: {}", downstream.getId(), status);
-        closeQuietly(upstream(downstream), status);
+        UpstreamRelay relay = relay(downstream);
+        if (relay != null) {
+            closeQuietly(relay.upstream(), status);
+        }
     }
 
-    private static WebSocketSession upstream(WebSocketSession downstream) {
-        return (WebSocketSession) downstream.getAttributes().get(UPSTREAM_ATTR);
+    private static UpstreamRelay relay(WebSocketSession downstream) {
+        return (UpstreamRelay) downstream.getAttributes().get(RELAY_ATTR);
     }
 
-    private URI upstreamUri(URI downstreamUri) {
-        String scheme = "https".equalsIgnoreCase(targetUri.getScheme()) ? "wss" : "ws";
-        return UriComponentsBuilder.fromUri(targetUri)
-                .scheme(scheme)
-                .replacePath(downstreamUri.getRawPath())
-                .replaceQuery(downstreamUri.getRawQuery())
-                .build(true)
-                .toUri();
-    }
-
-    private WebSocketHttpHeaders upstreamHeaders(WebSocketSession downstream) {
-        HttpHeaders in = downstream.getHandshakeHeaders();
-        WebSocketHttpHeaders out = new WebSocketHttpHeaders();
-        in.forEach((name, values) -> {
-            if (!EXCLUDED_HEADERS.contains(name)) {
-                out.addAll(name, values);
-            }
-        });
-
-        // Only the backend's (prefixed) cookies are forwarded. Cookies the backend sets in its handshake response
-        // cannot reach the browser: the browser's handshake has already completed by then.
-        String backendCookies = cookieRewriter.toBackendCookieHeader(in.getOrEmpty(HttpHeaders.COOKIE));
-        if (backendCookies != null) {
-            out.set(HttpHeaders.COOKIE, backendCookies);
-        }
-
-        InetSocketAddress remote = downstream.getRemoteAddress();
-        if (remote != null) {
-            out.set("X-Forwarded-For", remote.getAddress().getHostAddress());
-        }
-        if (in.getFirst("Host") != null) {
-            out.set("X-Forwarded-Host", in.getFirst("Host"));
-        }
-        URI uri = downstream.getUri();
-        if (uri != null) {
-            out.set("X-Forwarded-Proto", "wss".equals(uri.getScheme()) || "https".equals(uri.getScheme()) ? "https" : "http");
-        }
-        if (upstreamOrigin != null) {
-            out.setOrigin(upstreamOrigin);
-        }
-        return out;
-    }
-
-    private static List<String> cookieNames(String cookieHeader) {
-        if (cookieHeader == null) {
-            return List.of();
-        }
-        return Arrays.stream(cookieHeader.split(";"))
-                .map(String::trim)
-                .map(cookie -> cookie.contains("=") ? cookie.substring(0, cookie.indexOf('=')) : cookie)
-                .toList();
-    }
-
-    private static void closeQuietly(WebSocketSession session, CloseStatus status) {
+    static void closeQuietly(WebSocketSession session, CloseStatus status) {
         if (session == null || !session.isOpen()) {
             return;
         }
@@ -190,37 +87,91 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
         return (code == 1005 || code == 1006 || code == 1015) ? CloseStatus.GOING_AWAY : status;
     }
 
-    private static Set<String> caseInsensitive(String... names) {
-        Set<String> set = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
-        set.addAll(Set.of(names));
-        return set;
-    }
+    /**
+     * Upstream side of the relay: receives frames from the backend and forwards them to the browser.
+     * <p>
+     * The upstream connects before the browser's session exists, so frames (and a close) arriving in between are
+     * held until {@link #attach} and then delivered in order.
+     */
+    static final class UpstreamRelay extends AbstractWebSocketHandler {
 
-    /** Receives frames from the backend and forwards them to the browser. */
-    private static final class UpstreamHandler extends AbstractWebSocketHandler {
+        private final List<WebSocketMessage<?>> pending = new ArrayList<>();
+        private WebSocketSession downstream;      // guarded by this
+        private CloseStatus closedBeforeAttach;   // guarded by this
+        private volatile WebSocketSession upstream;
 
-        private final WebSocketSession downstream;
-
-        UpstreamHandler(WebSocketSession downstream) {
-            this.downstream = downstream;
+        void setUpstream(WebSocketSession upstream) {
+            this.upstream = new ConcurrentWebSocketSessionDecorator(
+                    upstream, SEND_TIME_LIMIT_MS, WebSocketProxyConfig.MAX_MESSAGE_BYTES);
         }
 
-        @Override
-        public void handleMessage(WebSocketSession upstream, WebSocketMessage<?> message) throws Exception {
-            if ((message instanceof TextMessage || message instanceof BinaryMessage) && downstream.isOpen()) {
-                downstream.sendMessage(message);
+        WebSocketSession upstream() {
+            return upstream;
+        }
+
+        void attach(WebSocketSession downstream) throws IOException {
+            CloseStatus closed;
+            synchronized (this) {
+                for (WebSocketMessage<?> message : pending) {
+                    downstream.sendMessage(message);
+                }
+                pending.clear();
+                this.downstream = downstream;
+                closed = closedBeforeAttach;
+            }
+            if (closed != null) {
+                closeQuietly(downstream, closed);
+            }
+        }
+
+        void closeIfNeverAttached() {
+            boolean attached;
+            synchronized (this) {
+                attached = downstream != null;
+                pending.clear();
+            }
+            if (!attached) {
+                log.warn("WS browser session never opened; closing upstream {}", upstream == null ? null : upstream.getId());
+                closeQuietly(upstream, CloseStatus.GOING_AWAY);
             }
         }
 
         @Override
-        public void handleTransportError(WebSocketSession upstream, Throwable exception) {
-            log.warn("WS upstream transport error on {}: {}", upstream.getId(), exception.toString());
+        public void handleMessage(WebSocketSession upstreamSession, WebSocketMessage<?> message) throws Exception {
+            if (!(message instanceof TextMessage || message instanceof BinaryMessage)) {
+                return;
+            }
+            WebSocketSession target;
+            synchronized (this) {
+                if (downstream == null) {
+                    pending.add(message);
+                    return;
+                }
+                target = downstream;
+            }
+            if (target.isOpen()) {
+                target.sendMessage(message);
+            }
         }
 
         @Override
-        public void afterConnectionClosed(WebSocketSession upstream, CloseStatus status) {
-            log.info("WS upstream {} closed: {}", upstream.getId(), status);
-            closeQuietly(downstream, status);
+        public void handleTransportError(WebSocketSession upstreamSession, Throwable exception) {
+            log.warn("WS upstream transport error on {}: {}", upstreamSession.getId(), exception.toString());
+        }
+
+        @Override
+        public void afterConnectionClosed(WebSocketSession upstreamSession, CloseStatus status) {
+            log.info("WS upstream {} closed: {}", upstreamSession.getId(), status);
+            WebSocketSession target;
+            synchronized (this) {
+                target = downstream;
+                if (target == null) {
+                    closedBeforeAttach = status;
+                }
+            }
+            if (target != null) {
+                closeQuietly(target, status);
+            }
         }
     }
 }

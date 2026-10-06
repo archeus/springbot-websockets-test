@@ -51,19 +51,24 @@ splits the work:
   before the WebSocket handler mapping and would otherwise forward the handshake as plain HTTP (dropping
   the hop-by-hop `Upgrade` header). Apache HttpClient 5 is on the classpath so the gateway talks HTTP/1.1
   to the backend; the JDK client it would otherwise use attempts an `h2c` upgrade on every request.
-- **WebSocket**: `WebSocketProxyHandler` is a regular Spring `WebSocketHandler` registered on
-  `proxy.websocket-paths`. For each browser session it opens an upstream session to the backend
-  (same path and query string), then relays text/binary frames both ways. Closing either side closes the other.
-  End-to-end headers (`Authorization`, …) are copied to the upstream handshake, and cookies are filtered
-  (see [Cookie separation](#cookie-separation)). Hop-by-hop,
-  handshake and `Origin` headers are dropped. `X-Forwarded-For/Host/Proto` are set fresh rather than
-  trusted from the client.
+- **WebSocket**: registered on `proxy.websocket-paths`, in two parts:
+  - `WebSocketProxyHandshakeHandler` connects to the upstream (same path and query string) *during* the browser's
+    handshake, before answering it, and after Spring's same-origin check (cross-site handshakes never reach the
+    upstream). If the upstream refuses, the browser gets the upstream's status (e.g. 403), or 502 (unreachable)
+    / 504 (too slow), instead of a 101. If it accepts, the browser's handshake completes with the subprotocol the
+    upstream chose.
+  - `WebSocketProxyHandler` relays text/binary frames both ways. Frames (or a close) the upstream sends before
+    the browser's session is ready are held and delivered in order. Closing either side closes the other.
+  End-to-end headers (`Authorization`, …) and the requested subprotocols are copied to the upstream handshake, and
+  cookies are filtered (see [Cookie separation](#cookie-separation)). Hop-by-hop, handshake and `Origin` headers
+  are dropped. `X-Forwarded-For/Host/Proto` are set fresh rather than trusted from the client.
 - **Upstream `Origin`**: by default the upstream handshake has no `Origin` (Spring upstreams accept that). If the
-  upstream rejects it, or only accepts specific origins, the relay fails with
+  upstream rejects it, or only accepts specific origins, the browser's handshake fails with that 403 (browser console:
+  `Error during WebSocket handshake: Unexpected response code: 403`), and the proxy logs
   `DeploymentException: The HTTP response from the server [403] did not permit the HTTP upgrade to WebSocket`.
   Set `proxy.websocket-origin` to a value the upstream accepts. For comparison, Node `http-proxy` (`ws: true`)
   forwards the browser's `Origin` as-is, and its `changeOrigin` only changes the `Host` header.
-- **Debugging the upstream handshake**: `logging.level.org.example.proxy.mvc.WebSocketProxyHandler=DEBUG` logs the
+- **Debugging the upstream handshake**: `logging.level.org.example.proxy.mvc.WebSocketProxyHandshakeHandler=DEBUG` logs the
   header names and cookie names sent upstream (no values).
 
 Configuration lives in `mvc-proxy/src/main/resources/application.yml` (`proxy.target-uri`, `proxy.http-paths`,
@@ -172,8 +177,13 @@ Tested with a Node WebSocket client, curl and a real browser (Chromium via Playw
 - HTTP GET/POST proxied; backend sees `X-Forwarded-*` and `Forwarded` headers.
 - WebSocket: welcome, text echo, binary echo, 200 KB message, query string passthrough, clean close (1000).
 - Backend killed mid-session: both proxies close the browser socket (MVC: 1001, WebFlux: 1005).
-- Backend down at connect time: MVC proxy accepts then closes with 1012 "Upstream unavailable".
-  WebFlux accepts then closes with 1002. HTTP returns 500 from both.
+- Upstream refuses or fails the WebSocket handshake (MVC): the browser's handshake fails with the same status:
+  403 when the upstream answered 403, 502 when it is down or its TLS certificate is rejected, 504 when it accepts
+  the connection but never answers. Unit tests: `WebSocketProxyHandshakeHandlerTest`.
+- Upstream sends a message and closes right after accepting (MVC): the browser receives the message, then the
+  upstream's own close code and reason.
+- Subprotocols: a client asking for `echo.v1` gets it through both proxies (the echo server supports it).
+- Backend down at connect time: WebFlux accepts then closes with 1002. HTTP returns 500 from both proxies.
 - Cookies (HTTP and WebSocket handshake, both proxies): the backend receives only its own cookies, unprefixed. The
   hosting app receives only its own, and the two `JSESSIONID`s coexist. Unit tests: `ProxyCookieRewriterTest`.
 - Redirects (curl and browser, both proxies, plain and HTTPS backend): the absolute redirect to the backend
@@ -185,9 +195,9 @@ Tested with a Node WebSocket client, curl and a real browser (Chromium via Playw
 
 ## Known limitations of the MVC WebSocket relay (POC scope)
 
-- WebSocket sub-protocols (`Sec-WebSocket-Protocol`) are not negotiated through the proxy.
-- The browser handshake completes before the upstream connection is attempted, so a down backend shows up as
-  "open, then closed 1012" rather than a failed handshake.
-- Each new connection blocks a servlet thread while connecting upstream (up to 10 s).
+- Each new connection blocks a servlet thread while connecting upstream (up to 10 s; Tomcat's client itself gives
+  up on an unanswered handshake after 5 s).
+- Only the upstream's status reaches the browser, not its response headers or body (e.g. its error message).
+- Cookies the upstream sets in its handshake response don't reach the browser.
 - Ping/pong is per hop and not relayed.
 - Fragmented messages are reassembled (up to 1 MB) rather than streamed frame by frame.
