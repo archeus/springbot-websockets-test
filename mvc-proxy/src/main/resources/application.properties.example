@@ -1,0 +1,15 @@
+# Example only: equivalent of application.yml in .properties format.
+# Not loaded by Spring Boot (.example extension). To use it, rename it to application.properties and remove application.yml.
+
+spring.application.name=mvc-proxy
+# X-Forwarded-* headers are only added when the caller's address matches this regex.
+# (Backslashes are escape characters in .properties, so they are doubled.)
+spring.cloud.gateway.server.webmvc.trusted-proxies=127\\.0\\.0\\.1|0:0:0:0:0:0:0:1|::1
+
+server.port=9080
+
+proxy.target-uri=http://localhost:9081
+# Plain HTTP, proxied by Spring Cloud Gateway Server MVC.
+proxy.http-paths[0]=/path1/**
+# WebSocket endpoints, proxied by WebSocketProxyHandler (matched before the HTTP route).
+proxy.websocket-paths[0]=/path1/ws

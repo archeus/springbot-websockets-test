@@ -1,0 +1,17 @@
+# Example only: equivalent of application.yml in .properties format.
+# Not loaded by Spring Boot (.example extension). To use it, rename it to application.properties and remove application.yml.
+
+spring.application.name=webflux-proxy
+# X-Forwarded-* headers are only added when the caller's address matches this regex.
+# (Backslashes are escape characters in .properties, so they are doubled.)
+spring.cloud.gateway.server.webflux.trusted-proxies=127\\.0\\.0\\.1|0:0:0:0:0:0:0:1|::1
+# Default is 64 KB; applies to both the browser-facing and the backend-facing side.
+spring.cloud.gateway.server.webflux.httpclient.websocket.max-frame-payload-length=1048576
+
+# One route covers both HTTP and WebSocket: the reactive gateway detects the
+# "Upgrade: websocket" request header and switches to its WebSocket routing filter.
+spring.cloud.gateway.server.webflux.routes[0].id=echo-server
+spring.cloud.gateway.server.webflux.routes[0].uri=http://localhost:9081
+spring.cloud.gateway.server.webflux.routes[0].predicates[0]=Path=/path1/**
+
+server.port=9082

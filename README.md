@@ -61,6 +61,9 @@ WebSocket routing filter. No code beyond the main class and `application.yml` is
 
 ## Configuration notes
 
+- The active config of each proxy is `application.yml`. Next to it, `application.properties.example` holds the
+  same settings in `.properties` format, for reference only; the `.example` extension keeps Spring Boot from loading it.
+
 - `spring.cloud.gateway.server.{webmvc,webflux}.trusted-proxies`: recent Gateway versions only emit
   `X-Forwarded-*`/`Forwarded` headers when this is set. It is set to localhost here.
 - WebSocket message size limits were raised to 1 MB everywhere. Defaults are 8 KB in Tomcat (`echo-server`
