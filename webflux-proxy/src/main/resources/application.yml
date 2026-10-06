@@ -8,6 +8,10 @@ spring:
           # X-Forwarded-* headers are only added when the caller's address matches this regex.
           trusted-proxies: '127\.0\.0\.1|0:0:0:0:0:0:0:1|::1'
           httpclient:
+            ssl:
+              # DEV ONLY: with an https:// route URI, accept any upstream certificate and host name
+              # (applies to HTTP and WebSocket, which share this client).
+              use-insecure-trust-manager: false
             websocket:
               # Default is 64 KB; applies to both the browser-facing and the backend-facing side.
               max-frame-payload-length: 1048576

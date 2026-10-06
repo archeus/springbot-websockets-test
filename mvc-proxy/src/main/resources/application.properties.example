@@ -9,6 +9,8 @@ spring.cloud.gateway.server.webmvc.trusted-proxies=127\\.0\\.0\\.1|0:0:0:0:0:0:0
 server.port=9080
 
 proxy.target-uri=http://localhost:9081
+# DEV ONLY: with an https:// target, accept any upstream certificate and host name (HTTP and WebSocket).
+proxy.insecure-tls=false
 # Plain HTTP, proxied by Spring Cloud Gateway Server MVC.
 proxy.http-paths[0]=/path1/**
 # WebSocket endpoints, proxied by WebSocketProxyHandler (matched before the HTTP route).

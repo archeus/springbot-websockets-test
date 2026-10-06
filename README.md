@@ -102,6 +102,37 @@ Limitations:
 - WebSocket message size limits were raised to 1 MB everywhere. Defaults are 8 KB in Tomcat (`echo-server`
   and `mvc-proxy`) and 64 KB in the WebFlux gateway (`httpclient.websocket.max-frame-payload-length`).
 
+## Upstream TLS (https:// / wss:// backends)
+
+Point the proxy at an `https://` target and WebSockets automatically go to `wss://`. With a backend certificate
+the JVM doesn't trust (self-signed, wrong host name), the handshake fails with `PKIX path building failed`.
+
+**Dev only: skip verification**
+
+- MVC: `proxy.insecure-tls=true` (`InsecureTlsConfig`). It has to cover two separate clients:
+  - HTTP: Gateway MVC ignores an `HttpClient` bean you define yourself; it only uses a `ClientHttpRequestFactory`
+    bean. The config builds one through Boot's `ClientHttpRequestFactoryBuilder`, replacing only TLS, so the
+    gateway's other client settings (e.g. not following redirects) still apply.
+  - WebSocket: the relay's `StandardWebSocketClient` gets the same trust-all `SSLContext` via `setSslContext`.
+  - The trust manager must extend `X509ExtendedTrustManager`. A plain `X509TrustManager` is wrapped by the JDK,
+    which still checks the host name. Tomcat's WebSocket client turns that check on, so it fails with
+    `No name matching localhost found`.
+- WebFlux: `spring.cloud.gateway.server.webflux.httpclient.ssl.use-insecure-trust-manager=true`. HTTP and WebSocket share
+  the gateway's HTTP client, so one property covers both.
+
+**Proper alternative:** trust the backend's certificate instead of trusting everything. Use an SSL bundle, or
+`spring.cloud.gateway.server.webflux.httpclient.ssl.trusted-x509-certificates` on WebFlux.
+
+Tested against the echo server on HTTPS with a self-signed certificate for `CN=echo.invalid`, reached as
+`localhost`: both proxies fail by default and work over HTTP and WebSocket with the setting on.
+
+```bash
+keytool -genkeypair -alias echo -keyalg RSA -dname "CN=echo.invalid" -storetype PKCS12 -keystore echo-tls.p12 -storepass changeit
+java -jar echo-server/target/echo-server-1.0-SNAPSHOT.jar --server.port=9443 \
+  --server.ssl.key-store=file:echo-tls.p12 --server.ssl.key-store-password=changeit
+java -jar mvc-proxy/target/mvc-proxy-1.0-SNAPSHOT.jar --proxy.target-uri=https://localhost:9443 --proxy.insecure-tls=true
+```
+
 ## Verified behaviour
 
 Tested with a Node WebSocket client, curl and a real browser (Chromium via Playwright) against all three ports:

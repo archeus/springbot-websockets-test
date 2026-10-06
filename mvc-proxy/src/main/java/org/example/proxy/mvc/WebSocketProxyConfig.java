@@ -2,6 +2,7 @@ package org.example.proxy.mvc;
 
 import jakarta.websocket.ContainerProvider;
 import jakarta.websocket.WebSocketContainer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
@@ -9,6 +10,8 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
+
+import javax.net.ssl.SSLContext;
 
 @Configuration
 @EnableWebSocket
@@ -19,10 +22,13 @@ public class WebSocketProxyConfig implements WebSocketConfigurer {
 
     private final ProxyProperties props;
     private final ProxyCookieRewriter cookieRewriter;
+    private final ObjectProvider<SSLContext> insecureUpstreamSslContext;
 
-    public WebSocketProxyConfig(ProxyProperties props, ProxyCookieRewriter cookieRewriter) {
+    public WebSocketProxyConfig(ProxyProperties props, ProxyCookieRewriter cookieRewriter,
+                                ObjectProvider<SSLContext> insecureUpstreamSslContext) {
         this.props = props;
         this.cookieRewriter = cookieRewriter;
+        this.insecureUpstreamSslContext = insecureUpstreamSslContext;
     }
 
     @Override
@@ -37,7 +43,10 @@ public class WebSocketProxyConfig implements WebSocketConfigurer {
         WebSocketContainer container = ContainerProvider.getWebSocketContainer();
         container.setDefaultMaxTextMessageBufferSize(MAX_MESSAGE_BYTES);
         container.setDefaultMaxBinaryMessageBufferSize(MAX_MESSAGE_BYTES);
-        return new WebSocketProxyHandler(new StandardWebSocketClient(container), props.targetUri(), cookieRewriter);
+        StandardWebSocketClient client = new StandardWebSocketClient(container);
+        // Only present with proxy.insecure-tls=true (see InsecureTlsConfig); used for wss:// upstreams.
+        insecureUpstreamSslContext.ifAvailable(client::setSslContext);
+        return new WebSocketProxyHandler(client, props.targetUri(), cookieRewriter);
     }
 
     /** Buffer sizes for the browser-facing (server) side. */
