@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: webflux-proxy
+  cloud:
+    gateway:
+      server:
+        webflux:
+          # X-Forwarded-* headers are only added when the caller's address matches this regex.
+          trusted-proxies: '127\.0\.0\.1|0:0:0:0:0:0:0:1|::1'
+          httpclient:
+            websocket:
+              # Default is 64 KB; applies to both the browser-facing and the backend-facing side.
+              max-frame-payload-length: 1048576
+          routes:
+            # One route covers both HTTP and WebSocket: the reactive gateway detects the
+            # "Upgrade: websocket" request header and switches to its WebSocket routing filter.
+            - id: echo-server
+              uri: http://localhost:9081
+              predicates:
+                - Path=/path1/**
+
+server:
+  port: 9082

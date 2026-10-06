@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HTTP + WebSocket demo</title>
+    <link rel="icon" href="data:,">
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 960px; }
+        h1 { font-size: 1.4rem; }
+        fieldset { margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 6px; }
+        legend { font-weight: 600; }
+        button { margin: .2rem .3rem .2rem 0; }
+        input[type=text] { width: 22rem; }
+        #status { font-weight: 600; }
+        #status.open { color: #0a7a2f; }
+        #status.closed { color: #b00020; }
+        pre { background: #f4f4f4; padding: .8rem; height: 22rem; overflow: auto; white-space: pre-wrap; font-size: .85rem; }
+        code { background: #f4f4f4; padding: 0 .3rem; }
+    </style>
+</head>
+<body>
+<h1>HTTP + WebSocket demo</h1>
+<p>
+    Page origin: <code id="origin"></code><br>
+    Every call below uses a URL relative to this origin, so if this page is served by a proxy,
+    all traffic (HTTP and WebSocket) goes through that proxy.
+</p>
+
+<fieldset>
+    <legend>HTTP (REST controllers under <code>/path1/api</code>)</legend>
+    <button onclick="httpGet('/path1/api/hello?name=proxy')">GET /path1/api/hello</button>
+    <button onclick="httpPost()">POST /path1/api/echo</button>
+    <button onclick="httpGet('/path1/api/request-info')">GET /path1/api/request-info</button>
+</fieldset>
+
+<fieldset>
+    <legend>WebSocket (<code id="wsUrl"></code>)</legend>
+    Status: <span id="status" class="closed">disconnected</span><br>
+    <button onclick="wsConnect()">Connect</button>
+    <button onclick="wsDisconnect()">Disconnect</button>
+    <br>
+    <input type="text" id="message" value="hello over websocket" onkeydown="if (event.key === 'Enter') wsSend()">
+    <button onclick="wsSend()">Send</button>
+</fieldset>
+
+<button onclick="document.getElementById('log').textContent = ''">Clear log</button>
+<pre id="log"></pre>
+
+<script>
+    const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/path1/ws';
+    document.getElementById('origin').textContent = location.origin;
+    document.getElementById('wsUrl').textContent = wsUrl;
+
+    function log(prefix, text) {
+        const el = document.getElementById('log');
+        el.textContent += `[${new Date().toLocaleTimeString()}] ${prefix} ${text}\n`;
+        el.scrollTop = el.scrollHeight;
+    }
+
+    async function show(response) {
+        const text = await response.text();
+        let body = text;
+        try { body = JSON.stringify(JSON.parse(text), null, 2); } catch (e) { /* not JSON */ }
+        log('HTTP <-', `${response.status} ${response.url}\n${body}`);
+    }
+
+    async function httpGet(url) {
+        log('HTTP ->', 'GET ' + url);
+        try { await show(await fetch(url)); } catch (e) { log('HTTP !!', e); }
+    }
+
+    async function httpPost() {
+        const payload = { text: 'hello over http', sentAt: new Date().toISOString() };
+        log('HTTP ->', 'POST /path1/api/echo ' + JSON.stringify(payload));
+        try {
+            await show(await fetch('/path1/api/echo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }));
+        } catch (e) { log('HTTP !!', e); }
+    }
+
+    let ws = null;
+
+    function setStatus(text, open) {
+        const el = document.getElementById('status');
+        el.textContent = text;
+        el.className = open ? 'open' : 'closed';
+    }
+
+    function wsConnect() {
+        if (ws && ws.readyState <= WebSocket.OPEN) { log('WS', 'already connected'); return; }
+        log('WS', 'connecting to ' + wsUrl);
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => { setStatus('connected', true); log('WS', 'open'); };
+        ws.onmessage = e => log('WS <-', e.data);
+        ws.onerror = () => log('WS !!', 'error (see browser console)');
+        ws.onclose = e => { setStatus('disconnected', false); log('WS', `closed code=${e.code} reason=${e.reason}`); };
+    }
+
+    function wsSend() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) { log('WS !!', 'not connected'); return; }
+        const text = document.getElementById('message').value;
+        ws.send(text);
+        log('WS ->', text);
+    }
+
+    function wsDisconnect() {
+        if (ws) ws.close(1000, 'bye');
+    }
+</script>
+</body>
+</html>

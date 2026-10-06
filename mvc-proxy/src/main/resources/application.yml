@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: mvc-proxy
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          # X-Forwarded-* headers are only added when the caller's address matches this regex.
+          trusted-proxies: '127\.0\.0\.1|0:0:0:0:0:0:0:1|::1'
+
+server:
+  port: 9080
+
+proxy:
+  target-uri: http://localhost:9081
+  # Plain HTTP, proxied by Spring Cloud Gateway Server MVC.
+  http-paths:
+    - /path1/**
+  # WebSocket endpoints, proxied by WebSocketProxyHandler (matched before the HTTP route).
+  websocket-paths:
+    - /path1/ws
