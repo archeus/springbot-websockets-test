@@ -31,6 +31,9 @@ Open http://localhost:9081 (direct), http://localhost:9080 (MVC proxy), http://l
 - `GET  /path1/api/hello?name=x`
 - `POST /path1/api/echo` (JSON body, echoed back)
 - `GET  /path1/api/request-info` (method, URL, remote address, headers as seen by the backend)
+- `GET  /path1/api/redirect/absolute`: 302 to its own absolute URL (`http://localhost:9081/...`), built from the request
+- `GET  /path1/api/redirect/relative`: 302 to `/path1/api/hello...`
+- `GET  /path1/api/redirect/external`: 302 to `https://example.com/`
 - `POST /path1/api/cookies`: sets `JSESSIONID` and `BACKEND_PREF` (with `Path=/`)
 - `GET  /path1/api/cookies`: shows the `Cookie` header the backend received
 - `WS   /path1/ws`: sends a welcome message with the handshake headers (including `Cookie`), then echoes text and binary frames
@@ -102,6 +105,28 @@ Limitations:
 - WebSocket message size limits were raised to 1 MB everywhere. Defaults are 8 KB in Tomcat (`echo-server`
   and `mvc-proxy`) and 64 KB in the WebFlux gateway (`httpclient.websocket.max-frame-payload-length`).
 
+## Redirects
+
+A backend that builds absolute redirect URLs from the request it received uses its own address
+(`Location: http://localhost:9081/...`). Passed through as-is, that sends the browser straight to the backend,
+bypassing the proxy. Both proxies therefore rewrite `Location` with `UpstreamLocationRewriter` (plain Java, copied
+into each proxy):
+
+- A location with the upstream's own origin (same scheme, host and port) becomes relative (`/path1/...?...#...`). The
+  browser resolves it against the proxy's address, so the proxy's public host and scheme don't need configuring.
+  This also covers an `https://` backend behind an `http://` proxy.
+- Relative locations and redirects to other sites (e.g. an identity provider) are left untouched.
+
+Wiring: MVC adds an `.after(...)` step to the Gateway MVC route (`HttpProxyRoutes`). WebFlux uses the `ProxyRedirects`
+route filter, which compares against the URL the gateway actually called.
+
+The gateways' built-in `RewriteLocationResponseHeader` filter is not used: it replaces the host of *any* absolute
+location with the incoming `Host` (breaking external redirects) and keeps the backend's scheme.
+
+Only `Location` is rewritten. URLs inside response bodies (HTML links, JSON) are not; for those the backend should
+produce relative URLs or honour the `X-Forwarded-*` headers the proxies send (Spring Boot:
+`server.forward-headers-strategy=framework`).
+
 ## Upstream TLS (https:// / wss:// backends)
 
 Point the proxy at an `https://` target and WebSockets automatically go to `wss://`. With a backend certificate
@@ -144,6 +169,8 @@ Tested with a Node WebSocket client, curl and a real browser (Chromium via Playw
   WebFlux accepts then closes with 1002. HTTP returns 500 from both.
 - Cookies (HTTP and WebSocket handshake, both proxies): the backend receives only its own cookies, unprefixed. The
   hosting app receives only its own, and the two `JSESSIONID`s coexist. Unit tests: `ProxyCookieRewriterTest`.
+- Redirects (curl and browser, both proxies, plain and HTTPS backend): the absolute redirect to the backend
+  lands on the proxy; relative and external redirects are unchanged. Unit tests: `UpstreamLocationRewriterTest`.
 - Cross-origin handshake (`Origin: http://evil.example`): MVC proxy rejects it with **403** (Spring's default
   same-origin check). The WebFlux gateway does no origin check and forwards it. The echo server allows `*`, so it is
   accepted (101). Restrict `echo.websocket.allowed-origin-patterns` on the backend or add an origin check to

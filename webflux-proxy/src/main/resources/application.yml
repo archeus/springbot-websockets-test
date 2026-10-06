@@ -26,6 +26,8 @@ spring:
                 # The backend's cookies are stored in the browser as PX_<name>, confined to /path1.
                 # Only PX_ cookies are forwarded to the backend (prefix removed); this app's own cookies never are.
                 - ProxyCookies=PX_, /path1
+                # Redirects pointing at the upstream's own address are made relative, so the browser stays on the proxy.
+                - ProxyRedirects
 
 server:
   port: 9082

@@ -45,6 +45,14 @@
 </fieldset>
 
 <fieldset>
+    <legend>Redirects (open in a new tab; check the address bar)</legend>
+    <a href="/path1/api/redirect/absolute" target="_blank">302 to the backend's absolute URL</a> &middot;
+    <a href="/path1/api/redirect/relative" target="_blank">302 to a relative URL</a> &middot;
+    <a href="/path1/api/redirect/external" target="_blank">302 to an external site</a>
+    <p>Through a proxy, the first two must land on this page's origin; the third on example.com.</p>
+</fieldset>
+
+<fieldset>
     <legend>Cookies</legend>
     <p>
         Both the backend (<code>/path1/api/cookies</code>) and the proxy's own "main app" (<code>/main/cookies</code>)
