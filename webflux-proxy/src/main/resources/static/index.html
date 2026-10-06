@@ -44,6 +44,22 @@
     <button onclick="wsSend()">Send</button>
 </fieldset>
 
+<fieldset>
+    <legend>Cookies</legend>
+    <p>
+        Both the backend (<code>/path1/api/cookies</code>) and the proxy's own "main app" (<code>/main/cookies</code>)
+        set a <code>JSESSIONID</code>. Through a proxy, the backend's cookies are stored as <code>PX_*</code> under
+        <code>Path=/path1</code>, and only those are forwarded to it (prefix removed).
+        The <code>/main</code> endpoints exist only on the proxies.
+    </p>
+    <button onclick="httpPostEmpty('/main/cookies')">Main app: set cookies</button>
+    <button onclick="httpPostEmpty('/path1/api/cookies')">Backend: set cookies</button>
+    <br>
+    <button onclick="httpGet('/main/cookies')">Main app: cookies received</button>
+    <button onclick="httpGet('/path1/api/cookies')">Backend: cookies received</button>
+    <span>(the WebSocket welcome message also shows the cookies the backend received)</span>
+</fieldset>
+
 <button onclick="document.getElementById('log').textContent = ''">Clear log</button>
 <pre id="log"></pre>
 
@@ -79,6 +95,14 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             }));
+        } catch (e) { log('HTTP !!', e); }
+    }
+
+    async function httpPostEmpty(url) {
+        log('HTTP ->', 'POST ' + url);
+        try {
+            const response = await fetch(url, { method: 'POST' });
+            await show(response);
         } catch (e) { log('HTTP !!', e); }
     }
 

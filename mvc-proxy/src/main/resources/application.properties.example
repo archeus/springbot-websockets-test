@@ -13,3 +13,7 @@ proxy.target-uri=http://localhost:9081
 proxy.http-paths[0]=/path1/**
 # WebSocket endpoints, proxied by WebSocketProxyHandler (matched before the HTTP route).
 proxy.websocket-paths[0]=/path1/ws
+# The backend's cookies are stored in the browser as PX_<name>, confined to /path1.
+# Only PX_ cookies are forwarded to the backend (prefix removed); this app's own cookies never are.
+proxy.cookies.prefix=PX_
+proxy.cookies.path=/path1

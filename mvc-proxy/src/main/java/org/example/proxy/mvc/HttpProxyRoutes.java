@@ -24,12 +24,13 @@ import static org.springframework.web.servlet.function.RequestPredicates.path;
 public class HttpProxyRoutes {
 
     @Bean
-    public RouterFunction<ServerResponse> backendHttpRoute(ProxyProperties props) {
+    public RouterFunction<ServerResponse> backendHttpRoute(ProxyProperties props, ProxyCookieRewriter cookieRewriter) {
         RequestPredicate httpPaths = anyPath(props.httpPaths());
         RequestPredicate websocketPaths = anyPath(props.websocketPaths());
         return route("echo-server-http")
                 .route(httpPaths.and(websocketPaths.negate()), http())
                 .before(uri(props.targetUri()))
+                .filter(ProxyCookiesConfig.proxyCookies(cookieRewriter))
                 .build();
     }
 

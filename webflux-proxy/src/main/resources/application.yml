@@ -18,6 +18,10 @@ spring:
               uri: http://localhost:9081
               predicates:
                 - Path=/path1/**
+              filters:
+                # The backend's cookies are stored in the browser as PX_<name>, confined to /path1.
+                # Only PX_ cookies are forwarded to the backend (prefix removed); this app's own cookies never are.
+                - ProxyCookies=PX_, /path1
 
 server:
   port: 9082

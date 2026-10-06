@@ -13,5 +13,8 @@ spring.cloud.gateway.server.webflux.httpclient.websocket.max-frame-payload-lengt
 spring.cloud.gateway.server.webflux.routes[0].id=echo-server
 spring.cloud.gateway.server.webflux.routes[0].uri=http://localhost:9081
 spring.cloud.gateway.server.webflux.routes[0].predicates[0]=Path=/path1/**
+# The backend's cookies are stored in the browser as PX_<name>, confined to /path1.
+# Only PX_ cookies are forwarded to the backend (prefix removed); this app's own cookies never are.
+spring.cloud.gateway.server.webflux.routes[0].filters[0]=ProxyCookies=PX_, /path1
 
 server.port=9082

@@ -18,9 +18,11 @@ public class WebSocketProxyConfig implements WebSocketConfigurer {
     static final int MAX_MESSAGE_BYTES = 1024 * 1024;
 
     private final ProxyProperties props;
+    private final ProxyCookieRewriter cookieRewriter;
 
-    public WebSocketProxyConfig(ProxyProperties props) {
+    public WebSocketProxyConfig(ProxyProperties props, ProxyCookieRewriter cookieRewriter) {
         this.props = props;
+        this.cookieRewriter = cookieRewriter;
     }
 
     @Override
@@ -35,7 +37,7 @@ public class WebSocketProxyConfig implements WebSocketConfigurer {
         WebSocketContainer container = ContainerProvider.getWebSocketContainer();
         container.setDefaultMaxTextMessageBufferSize(MAX_MESSAGE_BYTES);
         container.setDefaultMaxBinaryMessageBufferSize(MAX_MESSAGE_BYTES);
-        return new WebSocketProxyHandler(new StandardWebSocketClient(container), props.targetUri());
+        return new WebSocketProxyHandler(new StandardWebSocketClient(container), props.targetUri(), cookieRewriter);
     }
 
     /** Buffer sizes for the browser-facing (server) side. */

@@ -9,7 +9,15 @@ import java.util.List;
  * @param targetUri      backend base URI (http://host:port); WebSockets use the same host/port with ws://
  * @param httpPaths      path patterns proxied as plain HTTP by Spring Cloud Gateway MVC
  * @param websocketPaths paths proxied as WebSockets by {@link WebSocketProxyHandler}
+ * @param cookies        how the backend's cookies are kept apart from this application's own cookies
  */
 @ConfigurationProperties("proxy")
-public record ProxyProperties(URI targetUri, List<String> httpPaths, List<String> websocketPaths) {
+public record ProxyProperties(URI targetUri, List<String> httpPaths, List<String> websocketPaths, Cookies cookies) {
+
+    /**
+     * @param prefix prefix marking the backend's cookies in the browser; only these are forwarded to the backend
+     * @param path   path the backend's cookies are confined to in the browser
+     */
+    public record Cookies(String prefix, String path) {
+    }
 }

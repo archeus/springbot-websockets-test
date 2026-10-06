@@ -26,6 +26,7 @@ public class EchoWebSocketHandler extends AbstractWebSocketHandler {
                 + " | Host=" + headers.getFirst("Host")
                 + " | X-Forwarded-For=" + headers.getFirst("X-Forwarded-For")
                 + " | X-Forwarded-Host=" + headers.getFirst("X-Forwarded-Host")
+                + " | Cookie=" + headers.getFirst("Cookie")
                 + " | uri=" + session.getUri()));
     }
 

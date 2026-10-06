@@ -38,7 +38,8 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
 
     /**
      * Headers not copied to the upstream handshake: hop-by-hop and handshake headers (the WebSocket client
-     * generates its own), plus forwarding headers, which are set fresh so a browser cannot spoof them.
+     * generates its own), forwarding headers, which are set fresh so a browser cannot spoof them, and
+     * {@code Cookie}, which is filtered by {@link ProxyCookieRewriter}.
      */
     private static final Set<String> EXCLUDED_HEADERS = caseInsensitive(
             "Host", "Origin", "Connection", "Upgrade", "Keep-Alive", "TE", "Trailer", "Transfer-Encoding",
@@ -46,14 +47,16 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
             "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Extensions",
             "Sec-WebSocket-Accept", "Sec-WebSocket-Protocol",
             "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port",
-            "X-Forwarded-Prefix");
+            "X-Forwarded-Prefix", "Cookie");
 
     private final WebSocketClient client;
     private final URI targetUri;
+    private final ProxyCookieRewriter cookieRewriter;
 
-    public WebSocketProxyHandler(WebSocketClient client, URI targetUri) {
+    public WebSocketProxyHandler(WebSocketClient client, URI targetUri, ProxyCookieRewriter cookieRewriter) {
         this.client = client;
         this.targetUri = targetUri;
+        this.cookieRewriter = cookieRewriter;
     }
 
     @Override
@@ -112,7 +115,7 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
                 .toUri();
     }
 
-    private static WebSocketHttpHeaders upstreamHeaders(WebSocketSession downstream) {
+    private WebSocketHttpHeaders upstreamHeaders(WebSocketSession downstream) {
         HttpHeaders in = downstream.getHandshakeHeaders();
         WebSocketHttpHeaders out = new WebSocketHttpHeaders();
         in.forEach((name, values) -> {
@@ -120,6 +123,13 @@ public class WebSocketProxyHandler extends AbstractWebSocketHandler {
                 out.addAll(name, values);
             }
         });
+
+        // Only the backend's (prefixed) cookies are forwarded. Cookies the backend sets in its handshake response
+        // cannot reach the browser: the browser's handshake has already completed by then.
+        String backendCookies = cookieRewriter.toBackendCookieHeader(in.getOrEmpty(HttpHeaders.COOKIE));
+        if (backendCookies != null) {
+            out.set(HttpHeaders.COOKIE, backendCookies);
+        }
 
         InetSocketAddress remote = downstream.getRemoteAddress();
         if (remote != null) {

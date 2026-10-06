@@ -15,7 +15,7 @@ Each app serves the same demo page at `/`. The page only uses relative URLs (`/p
 
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-mvn package -DskipTests
+mvn package
 
 java -jar echo-server/target/echo-server-1.0-SNAPSHOT.jar
 java -jar mvc-proxy/target/mvc-proxy-1.0-SNAPSHOT.jar
@@ -31,7 +31,12 @@ Open http://localhost:9081 (direct), http://localhost:9080 (MVC proxy), http://l
 - `GET  /path1/api/hello?name=x`
 - `POST /path1/api/echo` (JSON body, echoed back)
 - `GET  /path1/api/request-info` (method, URL, remote address, headers as seen by the backend)
-- `WS   /path1/ws`: sends a welcome message with the handshake headers, then echoes text and binary frames
+- `POST /path1/api/cookies`: sets `JSESSIONID` and `BACKEND_PREF` (with `Path=/`)
+- `GET  /path1/api/cookies`: shows the `Cookie` header the backend received
+- `WS   /path1/ws`: sends a welcome message with the handshake headers (including `Cookie`), then echoes text and binary frames
+
+Each proxy also hosts a stand-in for its own business logic: `POST /main/cookies` sets `JSESSIONID` and
+`MAIN_PREF`, and `GET /main/cookies` shows what it received.
 
 ## How the MVC proxy works
 
@@ -46,24 +51,52 @@ splits the work:
 - **WebSocket**: `WebSocketProxyHandler` is a regular Spring `WebSocketHandler` registered on
   `proxy.websocket-paths`. For each browser session it opens an upstream session to the backend
   (same path and query string), then relays text/binary frames both ways. Closing either side closes the other.
-  End-to-end headers (cookies, `Authorization`, …) are copied to the upstream handshake. Hop-by-hop,
+  End-to-end headers (`Authorization`, …) are copied to the upstream handshake, and cookies are filtered
+  (see [Cookie separation](#cookie-separation)). Hop-by-hop,
   handshake and `Origin` headers are dropped. `X-Forwarded-For/Host/Proto` are set fresh rather than
   trusted from the client.
 
 Configuration lives in `mvc-proxy/src/main/resources/application.yml` (`proxy.target-uri`, `proxy.http-paths`,
-`proxy.websocket-paths`).
+`proxy.websocket-paths`, `proxy.cookies`).
 
 ## How the WebFlux proxy works
 
 Spring Cloud Gateway WebFlux supports WebSockets out of the box. A single `Path=/path1/**` route with an
 `http://` URI handles both: when the request carries `Upgrade: websocket` the gateway switches to its
-WebSocket routing filter. No code beyond the main class and `application.yml` is needed.
+WebSocket routing filter. The only custom code is the `ProxyCookies` route filter described below.
+
+## Cookie separation
+
+The browser sees one host, the proxy's, so it keeps the hosting application's cookies and the backend's in one
+jar and sends them all on every request. Both proxies keep them apart with a prefix (`PX_`), applied by
+`ProxyCookieRewriter`. It is plain Java, copied into both proxies (keep the two copies in sync):
+
+| Direction | What the proxy does |
+|---|---|
+| Backend to browser (`Set-Cookie`) | Renames `JSESSIONID` to `PX_JSESSIONID`, drops `Domain`, and confines `Path` to `/path1`, so the browser never sends backend cookies to the hosting application. |
+| Browser to backend (`Cookie`) | Forwards only `PX_` cookies, with the prefix removed. All other cookies are dropped; if none remain, the header is removed. |
+
+The backend never sees the prefix, and same-named cookies (e.g. both apps' `JSESSIONID`) no longer collide.
+
+Configuration:
+- MVC: `proxy.cookies.prefix` and `proxy.cookies.path`. Applied to the HTTP route as a filter (`ProxyCookiesConfig`)
+  and to the WebSocket handshake in `WebSocketProxyHandler`.
+- WebFlux: the route filter `ProxyCookies=PX_, /path1` (`ProxyCookiesGatewayFilterFactory`). Being per route,
+  each backend can get its own prefix and path.
+
+Limitations:
+- WebSocket handshakes only filter the request side. Cookies a backend sets in its handshake response don't reach
+  the browser (in the MVC relay, the browser's handshake has already completed by then). Sessions are
+  normally established over HTTP first, so this rarely matters.
+- The prefix separates the two applications; it is not a security boundary between them. Code on the hosting
+  application, including its JavaScript for cookies without `HttpOnly`, can still read or set `PX_` cookies.
+- Browser-enforced name prefixes (`__Host-`, `__Secure-`) only work at the very start of the name, so renaming
+  them to `PX___Host-...` loses their guarantee. Handle this when TLS is added.
 
 ## Configuration notes
 
 - The active config of each proxy is `application.yml`. Next to it, `application.properties.example` holds the
   same settings in `.properties` format, for reference only; the `.example` extension keeps Spring Boot from loading it.
-
 - `spring.cloud.gateway.server.{webmvc,webflux}.trusted-proxies`: recent Gateway versions only emit
   `X-Forwarded-*`/`Forwarded` headers when this is set. It is set to localhost here.
 - WebSocket message size limits were raised to 1 MB everywhere. Defaults are 8 KB in Tomcat (`echo-server`
@@ -78,6 +111,8 @@ Tested with a Node WebSocket client, curl and a real browser (Chromium via Playw
 - Backend killed mid-session: both proxies close the browser socket (MVC: 1001, WebFlux: 1005).
 - Backend down at connect time: MVC proxy accepts then closes with 1012 "Upstream unavailable".
   WebFlux accepts then closes with 1002. HTTP returns 500 from both.
+- Cookies (HTTP and WebSocket handshake, both proxies): the backend receives only its own cookies, unprefixed. The
+  hosting app receives only its own, and the two `JSESSIONID`s coexist. Unit tests: `ProxyCookieRewriterTest`.
 - Cross-origin handshake (`Origin: http://evil.example`): MVC proxy rejects it with **403** (Spring's default
   same-origin check). The WebFlux gateway does no origin check and forwards it. The echo server allows `*`, so it is
   accepted (101). Restrict `echo.websocket.allowed-origin-patterns` on the backend or add an origin check to
